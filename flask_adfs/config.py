@@ -11,13 +11,12 @@ from cryptography.hazmat.backends.openssl.backend import backend
 from cryptography.x509 import load_der_x509_certificate
 
 
-from django.conf import settings as django_settings
+import settings as adfs_settings
+from flask import render_template
 #from django.contrib.auth import REDIRECT_FIELD_NAME
 #from django.contrib.auth import get_user_model
-#from django.core.exceptions import ImproperlyConfigured
 from django.http import QueryDict
-from django.shortcuts import render
-#from django.utils.module_loading import import_string
+from helpers import import_string
 
 try:
     from django.urls import reverse
@@ -27,10 +26,13 @@ except ImportError:  # Django < 1.10
 logger = logging.getLogger("django_auth_adfs")
 
 AZURE_AD_SERVER = "login.microsoftonline.com"
-DEFAULT_SETTINGS_CLASS = 'django_auth_adfs.config.Settings'
+DEFAULT_SETTINGS_CLASS = 'flask_adfs.config.Settings'
 
 
 class ConfigLoadError(Exception):
+    pass
+
+class ImproperlyConfigured(Exception):
     pass
 
 
@@ -38,10 +40,10 @@ def _get_settings_class():
     """
     Get the AUTH_ADFS setting from the Django settings.
     """
-    if not hasattr(django_settings, "AUTH_ADFS"):
+    if not hasattr(adfs_settings, "AUTH_ADFS"):
         msg = "The configuration directive 'AUTH_ADFS' was not found in your Django settings"
         raise ImproperlyConfigured(msg)
-    cls = django_settings.AUTH_ADFS.get('SETTINGS_CLASS', DEFAULT_SETTINGS_CLASS)
+    cls = adfs_settings.AUTH_ADFS.get('SETTINGS_CLASS', DEFAULT_SETTINGS_CLASS)
     return import_string(cls)
 
 
@@ -74,9 +76,7 @@ class Settings(object):
         self.USERNAME_CLAIM = "winaccountname"
         self.GUEST_USERNAME_CLAIM = None
         self.JWT_LEEWAY = 0
-        self.CUSTOM_FAILED_RESPONSE_VIEW = lambda request, error_message, status: render(
-            request, 'templates/flask_adfs_auth/login_failed.html', {'error_message': error_message}, status=status
-        )
+        self.CUSTOM_FAILED_RESPONSE_VIEW = lambda error_message: render_template('templates/flask_adfs_auth/login_failed.html', error_message=error_message)
         self.PROXIES = None
 
         self.VERSION = 'v1.0'
@@ -97,11 +97,13 @@ class Settings(object):
             "TOKEN_PATH": "This setting is automatically loaded from ADFS.",
         }
 
-        if not hasattr(django_settings, "AUTH_ADFS"):
-            msg = "The configuration directive 'AUTH_ADFS' was not found in your Django settings"
+        if not hasattr(adfs_settings, "AUTH_ADFS"):
+            msg = "The configuration directive 'AUTH_ADFS' was not found in your settings"
             raise ImproperlyConfigured(msg)
-        _settings = django_settings.AUTH_ADFS
+
+        _settings = adfs_settings.AUTH_ADFS
         # Settings class is loaded by now. Delete this setting
+        
         if "SETTINGS_CLASS" in _settings:
             del _settings["SETTINGS_CLASS"]
 
@@ -145,7 +147,7 @@ class Settings(object):
             if hasattr(self, setting):
                 setattr(self, setting, value)
             else:
-                msg = "'{0}' is not a valid configuration directive for django_auth_adfs."
+                msg = "'{0}' is not a valid configuration directive for flask_auth_adfs."
                 raise ImproperlyConfigured(msg.format(setting))
 
         if self.SERVER != AZURE_AD_SERVER and self.BLOCK_GUEST_USERS:
@@ -158,7 +160,7 @@ class Settings(object):
 
         for setting in required_settings:
             if not getattr(self, setting):
-                msg = "django_auth_adfs setting '{0}' has not been set".format(setting)
+                msg = "flask_auth_adfs setting '{0}' has not been set".format(setting)
                 raise ImproperlyConfigured(msg)
 
         # Setup dynamic settings
@@ -325,7 +327,7 @@ class ProviderConfig(object):
         This function returns the ADFS authorization URL.
 
         Args:
-            request(django.http.request.HttpRequest): A django Request object
+            request(Flask.request): A Flask Request object
             disable_sso(bool): Whether to disable single sign-on and force the ADFS server to show a login prompt.
             force_mfa(bool): If MFA should be forced
 
@@ -334,7 +336,7 @@ class ProviderConfig(object):
 
         """
         self.load_config()
-        redirect_to = django_settings.LOGIN_REDIRECT_URL
+        redirect_to = adfs_settings.LOGIN_REDIRECT_URL
         redirect_to = base64.urlsafe_b64encode(redirect_to.encode()).decode()
         query = QueryDict(mutable=True)
         query.update({
